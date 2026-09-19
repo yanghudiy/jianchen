@@ -28,27 +28,36 @@ else:
 # 强制将几率比权重转为数字类型，防止字符串格式干扰计算
 final_df['几率比权重'] = pd.to_numeric(final_df['几率比权重'], errors='coerce').fillna(1.0)
 final_df['群体标签'] = final_df['群体标签'].astype(str).str.strip()
+final_df['规范化群体标签'] = final_df['群体标签'].replace({'奸臣特徵': '奸臣特征', '忠臣特徵': '忠臣特征'})
 
 # 数学建模：构建正负道德情感极性轴（Z轴：-5 到 +5）
-max_or = final_df['几率比权重'].max()
-min_or = final_df['几率比权重'].min()
+# 🚨 【Z轴去重补丁】：按组内几率比权重排名生成唯一高度，避免同权词在Z轴重叠遮挡
+final_df = final_df.sort_values(by='几率比权重', ascending=False).reset_index(drop=True)
 
 z_scores = []
-for idx, row in final_df.iterrows():
-    norm_or = 1.0 + 4.0 * (row['几率比权重'] - min_or) / (max_or - min_or + 1e-5)
-    # 兼容繁体字和简体字的标签判断
-    is_zhong = "忠" in row['群体标签']
-    z_val = norm_or if is_zhong else -norm_or
-    z_scores.append(z_val)
-final_df['道德极性指数'] = z_scores
-final_df['规范化群体标签'] = final_df['群体标签'].apply(lambda x: '忠臣特征' if '忠' in x else '奸臣特征')
+for label in ['忠', '奸']:
+    mask = final_df['群体标签'].str.contains(label)
+    sub = final_df[mask].sort_values(by='几率比权重', ascending=False)
+    n = len(sub)
+    # 每个词在组内获得唯一排名高度：忠臣 +1.0~+5.0，奸臣 -1.0~-5.0
+    for rank, idx in enumerate(sub.index):
+        frac = (n - 1 - rank) / (n - 1) if n > 1 else 0.5  # 权重越高→越靠近极值
+        if label == '忠':
+            z_val = 6.0 + 24.0 * frac
+        else:
+            z_val = -(6.0 + 24.0 * frac)
+        z_scores.append((idx, z_val))
 
-# 让三轴比例更均衡：进一步拉开螺旋间距，避免 50 个词点过于拥挤，视觉上更清晰
+# 写回原 df（按原始索引对齐）
+idx_to_z = dict(z_scores)
+final_df['道德极性指数'] = final_df.index.map(lambda i: idx_to_z[i])
+
+# 🚨 【附加微调补丁】：将圆柱半径从 6 扩大到 8，在水平方向上也进一步拉开词与词的距离
 final_df = final_df.sort_values(by='道德极性指数', ascending=False).reset_index(drop=True)
 angles = np.linspace(0, 2 * np.pi, len(final_df), endpoint=False)
-spiral_radius = 6.8
-final_df['X_helix'] = spiral_radius * np.cos(angles)
-final_df['Y_helix'] = spiral_radius * np.sin(angles)
+final_df['X_helix'] = 50 * np.cos(angles)  # 半径放大到 50，给标签留足空间
+final_df['Y_helix'] = 50 * np.sin(angles)  # 半径放大到 50，给标签留足空间
+
 
 # 绘制纯净版全息 3D 图
 fig = px.scatter_3d(
@@ -69,25 +78,35 @@ fig.update_traces(
 
 # 增加 Z=0 处的半透明灰色中性道德参考面
 fig.add_trace(go.Surface(
-    x=np.linspace(-7, 7, 2), y=np.linspace(-7, 7, 2), z=np.zeros((2, 2)),
+    x=np.linspace(-52, 52, 2), y=np.linspace(-52, 52, 2), z=np.zeros((2, 2)),
     opacity=0.1, showscale=False, colorscale=[[0, '#888888'], [1, '#888888']], hoverinfo='skip'
 ))
 
 fig.update_layout(
     title=dict(
-        text='《明史》奸臣、忠臣情感特征25词及程度分布',
+        text='《明史》奸臣、忠臣特征25词及程度分布',
         x=0.5,
         xanchor='center',
         font=dict(size=24, color='#1f2937')
     ),
     scene=dict(
-        xaxis=dict(title='X: 空间舒展轴', showticklabels=False, range=[-7.5, 7.5]),
-        yaxis=dict(title='Y: 空间舒展轴', showticklabels=False, range=[-7.5, 7.5]),
+        xaxis=dict(
+            title='X: 空间舒展轴', showticklabels=False, range=[-55, 55],
+            showbackground=True, backgroundcolor='rgba(245, 245, 245, 0.8)',
+            gridcolor='rgba(90, 90, 90, 0.25)', zerolinecolor='rgba(60, 120, 200, 0.8)',
+            zerolinewidth=2, showgrid=True, showline=True
+        ),
+        yaxis=dict(
+            title='Y: 空间舒展轴', showticklabels=False, range=[-55, 55],
+            showbackground=True, backgroundcolor='rgba(245, 245, 245, 0.8)',
+            gridcolor='rgba(90, 90, 90, 0.25)', zerolinecolor='rgba(60, 120, 200, 0.8)',
+            zerolinewidth=2, showgrid=True, showline=True
+        ),
         zaxis=dict(
-            title='Z: 道德褒贬极性指数 (-8 到 +8)',
-            range=[-8.8, 8.8],
+            title='Z: 道德褒贬极性指数 (-30 到 +30)',
+            range=[-32, 32],
             tickmode='array',
-            tickvals=[-8, -6, -4, -2, 0, 2, 4, 6, 8],
+            tickvals=[-30, -24, -18, -12, -6, 0, 6, 12, 18, 24, 30],
             showbackground=True,
             backgroundcolor='rgba(245, 245, 245, 0.8)',
             gridcolor='rgba(90, 90, 90, 0.25)',
@@ -95,7 +114,7 @@ fig.update_layout(
             zerolinewidth=2,
             tickfont=dict(color='#374151')
         ),
-        camera=dict(eye=dict(x=2.2, y=1.8, z=1.0)),
+        camera=dict(eye=dict(x=1.5, y=1.5, z=1.2)),
         aspectmode='manual',
         aspectratio=dict(x=1.0, y=1.0, z=1.0)
     ),
