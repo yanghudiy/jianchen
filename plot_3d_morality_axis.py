@@ -1,201 +1,110 @@
-# -*- coding: utf-8 -*-
-"""
-正负道德情感烈度与褒贬极性数轴 —— 全息交互 3D 网页。
-读取 analysis_result.csv，将几率比权重非线性映射为
-道德褒贬极性指数（忠臣 +1~+5，奸臣 -5~-1），
-圆柱双螺旋布局，Z=0 零点参考面，生成独立交互 HTML。
-
-运行前请先安装依赖：
-    pip install pandas plotly numpy
-
-运行：
-    python plot_3d_morality_axis.py
-
-输出：
-    ./analysis_morality_axis.html
-"""
-
-import os
-import numpy as np
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-# ----------------------------------------------------------------------
-# 路径与配置
-# ----------------------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(BASE_DIR, "analysis_result.csv")
-OUT_HTML = os.path.join(BASE_DIR, "analysis_morality_axis.html")
+print("【🚀本地系统提示】: 正在构建【位置硬绑定・50词全息双螺旋】图...")
 
-# 学术级配色
-COLOR_LOYAL = "#2b5c8f"
-COLOR_TRAITOR = "#b83b3b"
+# 读取 25 词扩容版的数据结果
+try:
+    final_df = pd.read_csv('./analysis_result.csv')
+except FileNotFoundError:
+    print("【⚠️错误】: 请先运行 history_analysis.py 生成基础数据！")
+    exit()
 
-# 圆柱半径 & 总词数
-RADIUS = 5.0
-TOTAL_WORDS = 30
+# 🚨 【终极修复点】：彻底抛弃字符名字匹配，改用绝对位置绑定
+# 无论第一列叫什么，强行改叫 '词语'；第四列强行叫 '几率比权重'；第五列强行叫 '群体标签'
+if len(final_df.columns) >= 5:
+    final_df.columns.values[0] = '词语'
+    final_df.columns.values[1] = '奸臣组频数'
+    final_df.columns.values[2] = '忠臣组频数'
+    final_df.columns.values[3] = '几率比权重'
+    final_df.columns.values[4] = '群体标签'
+else:
+    # 极端防错：如果列数不足，强行补充
+    print("【⚠️警告】: CSV文件数据列数不足，正在强行修正...")
+    final_df.columns = ['词语', '奸臣组频数', '忠臣组频数', '几率比权重', '群体标签'][:len(final_df.columns)]
 
-CJK_FONT = "Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
+# 强制将几率比权重转为数字类型，防止字符串格式干扰计算
+final_df['几率比权重'] = pd.to_numeric(final_df['几率比权重'], errors='coerce').fillna(1.0)
+final_df['群体标签'] = final_df['群体标签'].astype(str).str.strip()
 
+# 数学建模：构建正负道德情感极性轴（Z轴：-5 到 +5）
+max_or = final_df['几率比权重'].max()
+min_or = final_df['几率比权重'].min()
 
-# ----------------------------------------------------------------------
-# 读取 CSV
-# ----------------------------------------------------------------------
-def read_result(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, encoding="utf-8")
-    df.columns = [c.strip() for c in df.columns]
-    return df
+z_scores = []
+for idx, row in final_df.iterrows():
+    norm_or = 1.0 + 4.0 * (row['几率比权重'] - min_or) / (max_or - min_or + 1e-5)
+    # 兼容繁体字和简体字的标签判断
+    is_zhong = "忠" in row['群体标签']
+    z_val = norm_or if is_zhong else -norm_or
+    z_scores.append(z_val)
+final_df['道德极性指数'] = z_scores
+final_df['规范化群体标签'] = final_df['群体标签'].apply(lambda x: '忠臣特征' if '忠' in x else '奸臣特征')
 
+# 让三轴比例更均衡：进一步拉开螺旋间距，避免 50 个词点过于拥挤，视觉上更清晰
+final_df = final_df.sort_values(by='道德极性指数', ascending=False).reset_index(drop=True)
+angles = np.linspace(0, 2 * np.pi, len(final_df), endpoint=False)
+spiral_radius = 6.8
+final_df['X_helix'] = spiral_radius * np.cos(angles)
+final_df['Y_helix'] = spiral_radius * np.sin(angles)
 
-# ----------------------------------------------------------------------
-# 道德褒贬极性指数计算
-# ----------------------------------------------------------------------
-def compute_morality_index(sub: pd.DataFrame) -> pd.DataFrame:
-    """
-    忠臣特征 → 正区间 [+1.0, +5.0]
-    奸臣特征 → 负区间 [-5.0, -1.0]
-    使用 log1p 压缩后做 min-max 线性缩放到目标区间。
-    """
-    sub = sub.copy()
-    sub["OR_log"] = np.log1p(sub["几率比权重"].astype(float))
+# 绘制纯净版全息 3D 图
+fig = px.scatter_3d(
+    final_df, x='X_helix', y='Y_helix', z='道德极性指数',
+    text='词语', color='规范化群体标签',
+    color_discrete_map={'忠臣特征': '#2b5c8f', '奸臣特征': '#b83b3b'},
+    hover_data={'X_helix': False, 'Y_helix': False, '道德极性指数': ':.2f', '几率比权重': ':.2f'}
+)
 
-    loyal_mask = sub["群体标签"].str.contains("忠")
-    traitor_mask = sub["群体标签"].str.contains("奸")
+# 视觉美化与全白浮窗样式强设定
+fig.update_traces(
+    marker=dict(size=5.5, opacity=0.9),
+    textposition='top center',
+    textfont=dict(size=17, family='Microsoft YaHei, SimHei, sans-serif'),
+    hovertemplate="<b>【特征词】：%{text}</b><br>群体归属：%{customdata}<br>道德褒贬指数：%{z:.2f}<br>原始几率比：%{customdata:.2f}<br><i>【全息解说】：正值代表史官的道德褒扬，负值代表道德谴责。</i><extra></extra>",
+    hoverlabel=dict(font=dict(color='white', size=12)) # 强制浮窗文字全白
+)
 
-    # 忠臣：[+1, +5]
-    if loyal_mask.any():
-        lvals = sub.loc[loyal_mask, "OR_log"]
-        lmin, lmax = lvals.min(), lvals.max()
-        if lmax > lmin:
-            scaled = (lvals - lmin) / (lmax - lmin)  # 0~1
-        else:
-            scaled = pd.Series(0.5, index=lvals.index)
-        sub.loc[loyal_mask, "道德褒贬极性指数"] = 1.0 + scaled * 4.0  # +1~+5
+# 增加 Z=0 处的半透明灰色中性道德参考面
+fig.add_trace(go.Surface(
+    x=np.linspace(-7, 7, 2), y=np.linspace(-7, 7, 2), z=np.zeros((2, 2)),
+    opacity=0.1, showscale=False, colorscale=[[0, '#888888'], [1, '#888888']], hoverinfo='skip'
+))
 
-    # 奸臣：[-5, -1]
-    if traitor_mask.any():
-        tvals = sub.loc[traitor_mask, "OR_log"]
-        tmin, tmax = tvals.min(), tvals.max()
-        if tmax > tmin:
-            scaled = (tvals - tmin) / (tmax - tmin)
-        else:
-            scaled = pd.Series(0.5, index=tvals.index)
-        sub.loc[traitor_mask, "道德褒贬极性指数"] = -(1.0 + scaled * 4.0)  # -1~-5
-
-    return sub
-
-
-# ----------------------------------------------------------------------
-# 全息三维散点图
-# ----------------------------------------------------------------------
-def plot(df: pd.DataFrame):
-    df = df.copy()
-    df["群体标签"] = df["群体标签"].astype(str)
-
-    loyal = df[df["群体标签"].str.contains("忠")].sort_values(
-        "几率比权重", ascending=False).head(15)
-    traitor = df[df["群体标签"].str.contains("奸")].sort_values(
-        "几率比权重", ascending=False).head(15)
-    sub = pd.concat([loyal, traitor], ignore_index=True)
-
-    # —— 道德褒贬极性指数 ——
-    sub = compute_morality_index(sub)
-
-    # —— 圆柱双螺旋布局 ——
-    sub = sub.sort_values("几率比权重", ascending=False).reset_index(drop=True)
-    sub["排名"] = np.arange(1, len(sub) + 1)
-    sub["theta"] = (sub["排名"] / TOTAL_WORDS) * 2.0 * np.pi
-    sub["X_helix"] = RADIUS * np.cos(sub["theta"])
-    sub["Y_helix"] = RADIUS * np.sin(sub["theta"])
-
-    fig = px.scatter_3d(
-        sub,
-        x="X_helix",
-        y="Y_helix",
-        z="道德褒贬极性指数",
-        color="群体标签",
-        text="词语",
-        custom_data=["奸臣组频数", "忠臣组频数", "几率比权重",
-                     "道德褒贬极性指数"],
-        color_discrete_map={
-            "忠臣特征": COLOR_LOYAL,
-            "奸臣特征": COLOR_TRAITOR,
-        },
-        title="<b>《明史》忠臣 vs 奸臣 正负道德褒贬极性全息投影</b>",
-    )
-
-    # —— 全白浮窗 ——
-    hover_tpl = (
-        "<b style='font-size:16px'>【词语】：%{text}</b><br>"
-        "━━━━━━━━━━━━━━━━<br>"
-        "奸臣文本频数：<b>%{customdata[0]}</b><br>"
-        "忠臣文本频数：<b>%{customdata[1]}</b><br>"
-        "原始几率比权重(OR)：<b>%{customdata[2]:.4f}</b><br>"
-        "━━━━━━━━━━━━━━━━<br>"
-        "<span style='color:white;'>"
-        "道德褒贬极性指数：<b>%{customdata[3]:+.2f}</b>"
-        "</span>"
-        "<extra></extra>"
-    )
-
-    fig.update_traces(
-        marker=dict(size=6, line=dict(width=0.4, color="#444")),
-        textposition="top center",
-        textfont=dict(size=11, color="#222", family=CJK_FONT),
-        hovertemplate=hover_tpl,
-        hoverlabel=dict(
-            font=dict(color="white", size=12),
-            bordercolor="black",
+fig.update_layout(
+    title=dict(
+        text='《明史》奸臣、忠臣情感特征25词及程度分布',
+        x=0.5,
+        xanchor='center',
+        font=dict(size=24, color='#1f2937')
+    ),
+    scene=dict(
+        xaxis=dict(title='X: 空间舒展轴', showticklabels=False, range=[-7.5, 7.5]),
+        yaxis=dict(title='Y: 空间舒展轴', showticklabels=False, range=[-7.5, 7.5]),
+        zaxis=dict(
+            title='Z: 道德褒贬极性指数 (-8 到 +8)',
+            range=[-8.8, 8.8],
+            tickmode='array',
+            tickvals=[-8, -6, -4, -2, 0, 2, 4, 6, 8],
+            showbackground=True,
+            backgroundcolor='rgba(245, 245, 245, 0.8)',
+            gridcolor='rgba(90, 90, 90, 0.25)',
+            zerolinecolor='rgba(200, 60, 60, 0.8)',
+            zerolinewidth=2,
+            tickfont=dict(color='#374151')
         ),
-        selector=dict(type="scatter3d"),
-    )
+        camera=dict(eye=dict(x=2.2, y=1.8, z=1.0)),
+        aspectmode='manual',
+        aspectratio=dict(x=1.0, y=1.0, z=1.0)
+    ),
+    margin=dict(l=12, r=12, b=12, t=60),
+    legend=dict(title_text='史官道德叙事判定', yanchor="top", y=0.95, xanchor="left", x=0.05),
+    width=1500,
+    height=1100
+)
 
-    # —— 立体零点平面（道德中性分界线） ——
-    z_plane_x = np.array([-RADIUS, RADIUS, RADIUS, -RADIUS])
-    z_plane_y = np.array([-RADIUS, -RADIUS, RADIUS, RADIUS])
-    z_plane_z = np.array([0, 0, 0, 0])
-    fig.add_trace(go.Mesh3d(
-        x=z_plane_x, y=z_plane_y, z=z_plane_z,
-        color="lightgray", opacity=0.12,
-        alphahull=0,
-        hoverinfo="skip",
-        showlegend=False,
-    ))
-
-    # —— 坐标轴命名 ——
-    fig.update_layout(
-        scene=dict(
-            xaxis=dict(title=dict(text="圆柱面 X 坐标 (cosθ)"),
-                       backgroundcolor="rgba(245,245,250,0.9)",
-                       gridcolor="#cccccc", showbackground=True),
-            yaxis=dict(title=dict(text="圆柱面 Y 坐标 (sinθ)"),
-                       backgroundcolor="rgba(245,245,250,0.9)",
-                       gridcolor="#cccccc", showbackground=True),
-            zaxis=dict(title=dict(text="道德褒贬极性指数 (-5 到 +5)"),
-                       backgroundcolor="rgba(245,245,250,0.9)",
-                       gridcolor="#cccccc", showbackground=True,
-                       zeroline=True, zerolinewidth=2,
-                       zerolinecolor="rgba(120,120,120,0.6)"),
-            camera=dict(eye=dict(x=1.4, y=1.4, z=1.1)),
-            aspectmode="cube",
-        ),
-        legend=dict(title=dict(text="群体标签"),
-                    font=dict(family=CJK_FONT, size=12)),
-        title_font=dict(family=CJK_FONT, size=18),
-        margin=dict(l=0, r=0, t=80, b=0),
-    )
-
-    fig.write_html(OUT_HTML, include_plotlyjs="cdn")
-
-
-# ----------------------------------------------------------------------
-# 主流程
-# ----------------------------------------------------------------------
-def main():
-    df = read_result(CSV_PATH)
-    plot(df)
-
-
-if __name__ == "__main__":
-    main()
+output_path = './analysis_morality_axis.html'
+fig.write_html(output_path)
+print(f"【🎉大功告成】: 50词独立全息网页已成功生成！请查看: {output_path}")
